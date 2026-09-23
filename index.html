@@ -383,7 +383,8 @@ async function start() {
   const loadingEl = document.getElementById('loading');
   try {
     loadingEl.textContent = 'Загрузка resources.pak…';
-    pakEntries = await loadPak('./resources.pak', r => {
+const PAK_URL = 'https://github.com/MKLIUKANG1/MKLIUKANG1-Player/releases/latest/download/resources.pak';
+pakEntries = await loadPak(PAK_URL, r => {
       loadingEl.textContent = `Загрузка resources.pak… ${(r * 100) | 0}%`;
     });
 
