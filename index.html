@@ -2,13 +2,15 @@
 <html lang="ru">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
 <link rel="icon" href="data:,">
 <title>MIDI Player Web</title>
 <style>
   html, body { margin: 0; padding: 0; height: 100%; background: #0a0c10;
-               overflow: hidden; font-family: sans-serif; color: #c0c0d0; }
-  #c { display: block; width: 100vw; height: 100vh; }
+               overflow: hidden; font-family: sans-serif; color: #c0c0d0;
+               -webkit-tap-highlight-color: transparent;
+               -webkit-user-select: none; user-select: none; }
+  #c { display: block; width: 100vw; height: 100vh; touch-action: none; }
   #loading { position: fixed; inset: 0; display: flex; align-items: center;
              justify-content: center; background: #0a0c10; color: #80a0d0;
              font-size: 20px; z-index: 10; text-align: center; padding: 20px; }
@@ -82,9 +84,7 @@ async function loadPak(url, onProgress) {
 //                     ИМЯ ФАЙЛА
 // ============================================================
 function cleanName(name) {
-  // убираем "midi/" или "soundfonts/" в начале
   name = name.replace(/^(midi|soundfonts)\//, '');
-  // убираем расширение
   name = name.replace(/\.[^.]+$/, '');
   return name;
 }
@@ -161,7 +161,6 @@ async function playTrack(idx) {
     fileName: m.name
   };
 
-  // Перезагружаем список с одним треком — надёжный способ переключения
   await seq.loadNewSongList([song]);
   seq.play();
 }
@@ -169,20 +168,17 @@ async function playTrack(idx) {
 function nextTrack() { playTrack(currentIdx + 1); }
 function prevTrack() { playTrack(currentIdx - 1); }
 
-async function nextBank() {
-  await loadSoundBank(sf2Idx + 1);
-}
-async function prevBank() {
-  await loadSoundBank(sf2Idx - 1);
-}
+async function nextBank() { await loadSoundBank(sf2Idx + 1); }
+async function prevBank() { await loadSoundBank(sf2Idx - 1); }
 
 // ============================================================
 //                     CANVAS
 // ============================================================
 const canvas = document.getElementById('c');
 const ctx = canvas.getContext('2d');
+const isTouch = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
 let W = 800, H = 600;
-const dpr = window.devicePixelRatio || 1;
+const dpr = Math.min(window.devicePixelRatio || 1, 2);
 
 function resize() {
   const cw = canvas.clientWidth  || window.innerWidth  || 800;
@@ -193,6 +189,7 @@ function resize() {
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 }
 window.addEventListener('resize', resize);
+window.addEventListener('orientationchange', () => setTimeout(resize, 100));
 resize();
 
 function drawText(text, x, y, size, color) {
@@ -271,6 +268,8 @@ const STR = {
         hint: '↑/↓: ТРЕК  ←/→: БАНК  ПРОБЕЛ: ПАУЗА  L: ЯЗЫК' }
 };
 
+let btnRects = {};
+
 function drawInterface(t) {
   if (W <= 0 || H <= 0) resize();
 
@@ -289,13 +288,12 @@ function drawInterface(t) {
   drawText(S.now, 24, 20, 14, '#5a8cd2');
   drawText(lang, W - 40, 20, 14, '#90b0e0');
 
-  // Название трека — БЕЗ "midi/"
   let title = '—';
   if (midiFiles.length > 0 && currentIdx >= 0 && currentIdx < midiFiles.length) {
     title = cleanName(midiFiles[currentIdx].name);
   }
 
-  const titleScale = W >= 900 ? 42 : 30;
+  const titleScale = W >= 900 ? 42 : (W >= 600 ? 30 : 24);
   const maxTitleW = W - 48;
   const tw = textWidth(title, titleScale);
   if (tw > maxTitleW && title !== '—') {
@@ -318,19 +316,81 @@ function drawInterface(t) {
   const eqX = 24;
   const eqY = 52 + titleScale + 40;
   const eqW = W - 48;
-  const eqH = Math.max(60, H - eqY - 100);
+  const eqH = Math.max(60, H - eqY - (isTouch ? 160 : 100));
   drawEqualizer(eqX, eqY, eqW, eqH);
 
-  // Sound Engine — БЕЗ "soundfonts/" и ".sf2"
   const sfName = sf2Files.length ? cleanName(sf2Files[sf2Idx].name) : '—';
-  drawText(S.engine + ': ' + sfName, 24, H - 80, 14, '#5a8cd2');
+  drawText(S.engine + ': ' + sfName, 24, H - (isTouch ? 140 : 80), 14, '#5a8cd2');
 
-  const hintW = textWidth(S.hint, 14);
-  drawText(S.hint, Math.max(12, (W - hintW) / 2), H - 24, 14, '#6478a0');
+  // ---------- Кнопки для тача ----------
+  if (isTouch) {
+    const BTN = Math.min(72, Math.floor(H * 0.14));
+    const GAP = Math.min(24, Math.floor(W * 0.04));
+    const totalW = BTN * 3 + GAP * 2;
+    const startX = (W - totalW) / 2;
+    const btnY = H - BTN - 16;
+
+    btnRects = {
+      prev: { x: startX,                     y: btnY, w: BTN, h: BTN },
+      play: { x: startX + BTN + GAP,         y: btnY, w: BTN, h: BTN },
+      next: { x: startX + (BTN + GAP) * 2,   y: btnY, w: BTN, h: BTN },
+    };
+
+    function drawBtn(r, symbol, active) {
+      ctx.fillStyle = active ? 'rgba(50,120,220,0.9)' : 'rgba(40,55,85,0.85)';
+      ctx.beginPath();
+      if (ctx.roundRect) ctx.roundRect(r.x, r.y, r.w, r.h, 14);
+      else               ctx.rect(r.x, r.y, r.w, r.h);
+      ctx.fill();
+      ctx.strokeStyle = active ? '#7ab0ff' : 'rgba(90,120,180,0.7)';
+      ctx.lineWidth = 2;
+      ctx.stroke();
+
+      const cx = r.x + r.w / 2, cy = r.y + r.h / 2, s = r.w * 0.22;
+      ctx.fillStyle = '#ffffff';
+      if (symbol === 'prev') {
+        ctx.beginPath();
+        ctx.moveTo(cx + s * 0.5, cy - s);
+        ctx.lineTo(cx - s * 0.6, cy);
+        ctx.lineTo(cx + s * 0.5, cy + s);
+        ctx.closePath();
+        ctx.fill();
+        ctx.fillRect(cx - s * 0.9, cy - s, 3, s * 2);
+      } else if (symbol === 'next') {
+        ctx.beginPath();
+        ctx.moveTo(cx - s * 0.5, cy - s);
+        ctx.lineTo(cx + s * 0.6, cy);
+        ctx.lineTo(cx - s * 0.5, cy + s);
+        ctx.closePath();
+        ctx.fill();
+        ctx.fillRect(cx + s * 0.9 - 3, cy - s, 3, s * 2);
+      } else if (symbol === 'pause') {
+        ctx.fillRect(cx - s * 0.6, cy - s, s * 0.5, s * 2);
+        ctx.fillRect(cx + s * 0.1, cy - s, s * 0.5, s * 2);
+      } else if (symbol === 'play') {
+        ctx.beginPath();
+        ctx.moveTo(cx - s * 0.5, cy - s);
+        ctx.lineTo(cx - s * 0.5, cy + s);
+        ctx.lineTo(cx + s * 0.8, cy);
+        ctx.closePath();
+        ctx.fill();
+      }
+    }
+
+    drawBtn(btnRects.prev, 'prev', false);
+    drawBtn(btnRects.play, paused ? 'play' : 'pause', paused);
+    drawBtn(btnRects.next, 'next', false);
+  }
+
+  // Подсказка — только для десктопа
+  if (!isTouch) {
+    const hintW = textWidth(S.hint, 14);
+    drawText(S.hint, Math.max(12, (W - hintW) / 2), H - 24, 14, '#6478a0');
+  }
 }
 
 // ============================================================
-//                     УПРАВЛЕНИЕ
+//                     КЛАВИАТУРА (десктоп)
 // ============================================================
 let paused = false;
 
@@ -349,23 +409,74 @@ window.addEventListener('keydown', async e => {
   }
 });
 
+// ============================================================
+//                     ТАЧ (мобильные)
+// ============================================================
 let tx0 = 0, ty0 = 0, tt0 = 0;
+let touchHandled = false;
+
+function hitTest(x, y, r) {
+  return x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h;
+}
+
+function getCanvasPos(touch) {
+  const rect = canvas.getBoundingClientRect();
+  return {
+    x: touch.clientX - rect.left,
+    y: touch.clientY - rect.top
+  };
+}
+
 canvas.addEventListener('touchstart', e => {
   const t = e.touches[0];
-  tx0 = t.clientX; ty0 = t.clientY; tt0 = performance.now();
-});
-canvas.addEventListener('touchend', async e => {
-  const t = e.changedTouches[0];
-  const dx = t.clientX - tx0, dy = t.clientY - ty0;
-  const dt = performance.now() - tt0;
-  if (dt < 500 && Math.abs(dy) > Math.abs(dx) && Math.abs(dy) > 50) {
-    if (dy > 0) { await prevTrack(); paused = false; }
-    else        { await nextTrack(); paused = false; }
-  } else if (dt < 300 && Math.abs(dx) < 20 && Math.abs(dy) < 20) {
-    if (paused) { seq.play(); paused = false; }
-    else        { seq.pause(); stopAllNotes(); paused = true; }
+  const p = getCanvasPos(t);
+  tx0 = t.clientX;
+  ty0 = t.clientY;
+  tt0 = performance.now();
+  touchHandled = false;
+
+  if (isTouch) {
+    for (const [key, r] of Object.entries(btnRects)) {
+      if (hitTest(p.x, p.y, r)) {
+        touchHandled = true;
+        if (key === 'prev') { prevTrack(); paused = false; }
+        if (key === 'next') { nextTrack(); paused = false; }
+        if (key === 'play') {
+          if (paused) { seq.play(); paused = false; }
+          else        { seq.pause(); stopAllNotes(); paused = true; }
+        }
+        break;
+      }
+    }
   }
-});
+  e.preventDefault();
+}, { passive: false });
+
+canvas.addEventListener('touchend', e => {
+  if (touchHandled) return;
+  const t = e.changedTouches[0];
+  const dx = t.clientX - tx0;
+  const dy = t.clientY - ty0;
+  const dt = performance.now() - tt0;
+
+  if (dt < 500 && Math.abs(dy) > Math.abs(dx) && Math.abs(dy) > 60) {
+    if (dy > 0) { prevTrack(); paused = false; }
+    else        { nextTrack(); paused = false; }
+  }
+  else if (dt < 500 && Math.abs(dx) > Math.abs(dy) && Math.abs(dx) > 60) {
+    if (dx > 0) nextBank();
+    else        prevBank();
+  }
+  else if (dt < 300 && Math.abs(dx) < 20 && Math.abs(dy) < 20) {
+    const p = getCanvasPos(t);
+    const btnTop = H - 72 - 16;
+    if (p.y < btnTop - 10) {
+      if (paused) { seq.play(); paused = false; }
+      else        { seq.pause(); stopAllNotes(); paused = true; }
+    }
+  }
+  e.preventDefault();
+}, { passive: false });
 
 // ============================================================
 //                     ЦИКЛ
@@ -383,8 +494,7 @@ async function start() {
   const loadingEl = document.getElementById('loading');
   try {
     loadingEl.textContent = 'Загрузка resources.pak…';
-const PAK_URL = './resources.pak';
-pakEntries = await loadPak(PAK_URL, r => {
+    pakEntries = await loadPak('./resources.pak', r => {
       loadingEl.textContent = `Загрузка resources.pak… ${(r * 100) | 0}%`;
     });
 
@@ -412,6 +522,15 @@ document.getElementById('unlock').addEventListener('click', async () => {
   document.getElementById('unlock').classList.add('hidden');
   await audioCtx.resume();
   await playTrack(0);
+  paused = false;
+}, { once: true });
+
+document.getElementById('unlock').addEventListener('touchend', async (e) => {
+  e.preventDefault();
+  document.getElementById('unlock').classList.add('hidden');
+  await audioCtx.resume();
+  await playTrack(0);
+  paused = false;
 }, { once: true });
 
 start();
